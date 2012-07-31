@@ -68,24 +68,48 @@ static void consumeInData (void) {
     
         byte n = rf12_len;
         if (rf12_crc == 0) {
-            Serial.print("OK");
+            logPacketToSerial();
+
+//            Serial.print("OK");
         } 
-        Serial.print(' ');
-        Serial.print((int) rf12_hdr);
-        for (byte i = 0; i < n; ++i) {
-            Serial.print(' ');
-            Serial.print((int) rf12_data[i]);
-        }
-        Serial.println();
+//        Serial.print(' ');
+        
+        // size of packet
+//        Serial.print((int) rf12_hdr);  
+        
+        // payload
+//        for (byte i = 0; i < n; ++i) {
+//            Serial.print(',');  // should be optional
+//            Serial.print((int) rf12_data[i]);
+//        }
+//        Serial.println();
         
         if (rf12_crc == 0) {            
-//            if (RF12_WANTS_ACK && (config.nodeId & COLLECT) == 0) {
+            if (RF12_WANTS_ACK) { // && (config.nodeId & COLLECT) == 0) {
 //                Serial.println(" -> ack");
-//                rf12_sendStart(RF12_ACK_REPLY, 0, 0);
-//            }
+                rf12_sendStart(RF12_ACK_REPLY, 0, 0);
+            }
             
         }  
 }
+
+
+static void logPacketToSerial (void) {
+        byte n = rf12_len;
+
+        Serial.print("PACKET ");
+        
+        // size of packet
+        Serial.print((int) rf12_hdr);  
+        
+        // payload
+        for (byte i = 0; i < n; ++i) {
+            Serial.print(',');  // should be optional
+            Serial.print((int) rf12_data[i]);
+        }
+        Serial.println();        
+}
+
 
 
 static byte produceOutData () {
