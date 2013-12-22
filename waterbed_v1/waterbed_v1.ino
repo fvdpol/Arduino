@@ -411,4 +411,3 @@ float ds18b20_read(uint8_t *addr, byte type_s)
   return (float)raw / 16.0;
 }
 
-
