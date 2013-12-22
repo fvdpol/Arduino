@@ -19,6 +19,10 @@
 // http://playground.arduino.cc/Code/PIDLibrary
 //
 // http://fermentationriot.com/arduinopid.php
+=======
+#define TRANSMIT_INTERVAL 50  /* in 0.1 s */
+
+
 
 
 
@@ -294,7 +298,6 @@ void loop(void) {
         }          
       }
       break;
-
 
     case TASK_PWM_OUT:
       if (bed_output < 99.0) {
