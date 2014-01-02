@@ -6,6 +6,12 @@
   - subscribes to the topic "inTopic"
 */
 
+//#define USE_WDT  /* Watchdog time does not work with MEGA 2560 bootloader (old version?) */
+
+#ifdef USE_WDT
+#include <avr/wdt.h>
+#endif
+#include <avr/pgmspace.h>
 #include <SPI.h>
 #include <Ethernet.h>
 #include <PubSubClient.h>
@@ -16,20 +22,24 @@
 // smartmeter
 //#include <SoftwareSerial.h>
 
-#define NODE_ID 1
-#define GROUP_ID 235 
-
-
-#define MQTTCONNECT_INTERVAL  20
+#define MQTTCONNECT_INTERVAL  50
 #define TRANSMIT_INTERVAL 150  /* in 0.1 s */
 #define LIFESIGN_INTERVAL 100  /* in 0.1 s */
+#define WATCHDOG_INTERVAL 20   /* in 0.1 s -- should be smaller than the watchdog timeout */
 
 #define SERIAL_BAUD 57600
 
+
+#define LED_HEARTBEAT     13
+#define LED_GLOWTIME  1  /* in 0.1s */
+
+
 enum { 
-  TASK1, TASK2, 
   TASK_MQTTCONNECT,
   TASK_LIFESIGN,
+  TASK_WATCHDOG,
+  TASK_LED_HEARTBEAT,
+
   TASK_LIMIT };
   
 
@@ -49,7 +59,7 @@ TagExchangeStream tagExchangeSerial(&Serial1);
 
 
 // Update these with values suitable for your network.
-byte mac[]    = {  0xDE, 0xED, 0xBE, 0xEF, 0xFE, 0xED };
+byte mac[]    = {  0xDE, 0xED, 0xBE, 0xEF, 0xFE, 0x01 };
 byte server[] = { 192, 168, 1, 51 };
 
 
@@ -242,7 +252,7 @@ P1SmartMeter::P1SmartMeter(void) {
     
   buf = (char *)malloc(150);
   end=0;
-  buf[end]='\0';
+  buf[end]='\0';  
 }
 
 
@@ -319,8 +329,7 @@ void P1SmartMeter::processLine() {
                if (strcmp(tag,"0-1:24.3.0") == 0) {
                  pendingGasValue = true;
                  tag = "0-1:24-3-0/timestamp";
-               }
-              
+               } 
               
               // substitue the dots by dashses as this is interpreted as path separator by mqtt
               for(char *sub=tag; *sub; sub++)
@@ -454,16 +463,59 @@ int freeRam () {
 }
 
 
+// code to display the sketch name/compile date
+// http://forum.arduino.cc/index.php?PHPSESSID=82046rhab9h76mt6q7p8fle0u4&topic=118605.msg894017#msg894017
+
+int pgm_lastIndexOf(uint8_t c, const char * p)
+{
+  int last_index = -1; // -1 indicates no match
+  uint8_t b;
+  for(int i = 0; true; i++) {
+    b = pgm_read_byte(p++);
+    if (b == c)
+      last_index = i;
+    else if (b == 0) break;
+  }
+  return last_index;
+}
+
+// displays at startup the Sketch running in the Arduino
+
+void display_srcfile_details(void){
+  const char *the_path = PSTR(__FILE__);           // save RAM, use flash to hold __FILE__ instead
+
+  int slash_loc = pgm_lastIndexOf('/',the_path); // index of last '/' 
+  if (slash_loc < 0) slash_loc = pgm_lastIndexOf('\\',the_path); // or last '\' (windows, ugh)
+
+  int dot_loc = pgm_lastIndexOf('.',the_path);   // index of last '.'
+  if (dot_loc < 0) dot_loc = pgm_lastIndexOf(0,the_path); // if no dot, return end of string
+
+  Serial.print("\nSketch: ");
+
+  for (int i = slash_loc+1; i < dot_loc; i++) {
+    uint8_t b = pgm_read_byte(&the_path[i]);
+    if (b != 0) Serial.print((char) b);
+    else break;
+  }
+
+  Serial.print(", Compiled on: ");
+  Serial.print(__DATE__);
+  Serial.print(" at ");
+  Serial.print(__TIME__);
+  Serial.print("\n");
+}
+
+
+
+
 void showHelp(void) 
 {
-  Serial.println(F("\nmeterkast_v1"));  
+  display_srcfile_details();
+  
+  //Serial.println(F("\nmeterkast_v1"));  
   
   Serial.print(F("Free RAM: "));
   Serial.println(freeRam());
-  Serial.print(F("Network:  "));
-  Serial.println(GROUP_ID);
-  Serial.print(F("Node ID:  "));
-  Serial.println(NODE_ID);
   
   Serial.println(F("\n"
       "Available commands:\n"
@@ -476,7 +528,13 @@ void showHelp(void)
 
 void setup()
 {
+  // disable watchdog at boot-up, as the ethernet initialisation might take too long and wdt could still be enabled after soft-reset
+  wdt_disable();
+  
+  
   // setup pinmodes
+  pinMode(LED_HEARTBEAT,   OUTPUT);
+ 
   
   // console
   Serial.begin(SERIAL_BAUD);
@@ -496,7 +554,7 @@ void setup()
 
 
   
-  scheduler.timer(TASK_MQTTCONNECT, 10);
+  scheduler.timer(TASK_MQTTCONNECT, 100);
 
 //  if (MQTTClient.connect("arduinoClient")) {
 //    Serial.println("MMQT Connected");
@@ -520,6 +578,8 @@ void setup()
   scheduler.timer(TASK_LIFESIGN, LIFESIGN_INTERVAL);
 
 
+  // enable watchdog
+  scheduler.timer(TASK_WATCHDOG, WATCHDOG_INTERVAL);
 
 }
 
@@ -699,21 +759,9 @@ void loop()
   
 
   switch (scheduler.poll()) {
-    // LED 1 blinks regularly, once a second
-  case TASK1:
-    //    toggle1();
-    scheduler.timer(TASK1, 5);
-    break;
-
-    // LED 2 blinks with short on pulses and slightly slower
-  case TASK2:
-    //    toggle2();
-    scheduler.timer(TASK2, 6);
-    break;
-
       
   case TASK_MQTTCONNECT:
-         
+        wdt_disable(); /* mqtt can take long time causing watchdog timeout to happen */
         switch(Ethernet.maintain()) {
           case 1:
                   Serial.println(F("Ethernet DHCP renew failed."));
@@ -740,50 +788,90 @@ void loop()
         }
 
   
+    // the MQTT connection can take up to 30 seconds (MMQT keepalive = 15s ???)
+    // this can cause problems with the watchdog
   
         if (!MQTTClient.connected()) {
+          Serial.println(F("MMQT connecting..."));
           if (MQTTClient.connect("Meterkast")) {     
-            Serial.println(F("MMQT (re-)connected"));
+            Serial.println(F("MMQT connected."));
             
             MQTTClient.subscribe("raw/jeenode/tag/#");
           } else {
             Serial.println(F("Failed to connect MMQT"));
+          }
         }
-        }
+
       scheduler.timer(TASK_MQTTCONNECT, MQTTCONNECT_INTERVAL);
       break;
 
 
       
   case TASK_LIFESIGN:
-      //tagExchangeRF12.publishLong(100 + NODE_ID ,  millis());
-
       
       if (MQTTClient.connected()) {
         static char charMsg[10];
         memset(charMsg,'\0', 10);
-        //dtostrf(celsius, 4, 2, charMsg);
         sprintf(charMsg,"%ld",millis());
-          
-        //Serial.print("Lifesign = ");
-        //Serial.println(charMsg);
-
         MQTTClient.publish("raw/meterkast/millis",charMsg);
       }
       
-      
-      
+            
       if (MQTTClient.connected()) {
         static char charMsg[10];
         memset(charMsg,'\0', 10);
-        //dtostrf(celsius, 4, 2, charMsg);
-        sprintf(charMsg,"%d",freeRam());
-          
+        sprintf(charMsg,"%d",freeRam());         
         MQTTClient.publish("raw/meterkast/freeram",charMsg);
       }
       
-      
       scheduler.timer(TASK_LIFESIGN, LIFESIGN_INTERVAL);
+      break;
+
+
+  case TASK_WATCHDOG:
+            
+      // reset/re-arm the watchdog timer
+#ifdef USE_WDT
+      wdt_enable(WDTO_8S);
+      wdt_reset();
+#endif
+
+      //Serial.print(millis()/1000.0);
+      //Serial.println(F(" WDT reset"));
+      
+      scheduler.timer(TASK_WATCHDOG, WATCHDOG_INTERVAL);
+      scheduler.timer(TASK_LED_HEARTBEAT, 1);
+
+      break;
+
+
+
+    case TASK_LED_HEARTBEAT:
+      switch (heartbeat_state) {
+        case 0:
+          digitalWrite(LED_HEARTBEAT,   HIGH);
+          scheduler.timer(TASK_LED_HEARTBEAT, 1);
+          heartbeat_state = 1;
+          break;
+
+        case 1:
+          digitalWrite(LED_HEARTBEAT,   LOW);
+          scheduler.timer(TASK_LED_HEARTBEAT, 2);
+          heartbeat_state = 2;
+          break;
+
+        case 2:
+          digitalWrite(LED_HEARTBEAT,   HIGH);
+          scheduler.timer(TASK_LED_HEARTBEAT, 1);
+          heartbeat_state = 3;
+          break;
+
+        case 3:
+          digitalWrite(LED_HEARTBEAT,   LOW);
+          heartbeat_state = 0;
+          break;                
+      }
+      
       break;
 
       
