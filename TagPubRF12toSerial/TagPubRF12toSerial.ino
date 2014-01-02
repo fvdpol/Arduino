@@ -1,5 +1,3 @@
-#include <JeeLib.h>
-#include <TagExchange.h>
 
 /* Schetch to relay "TagExchange" Messages between RF12 network and the serial port.
 ** intended use is the provide a gateway to the jeenodes from a (linux) computer
@@ -7,16 +5,25 @@
 ** Frank van de Pol
 ** 10 November 2012
 **
+** Hardware: Arduino Uno + RF12 interface board
+** 
+** serial line to the meterkast node
+** pin 3 is wired to the meterkast node RESET pin to allow a watchdog reset
 */
 
+#include <JeeLib.h>
+#include <TagExchange.h>
 
 
-#define NODE_ID 6
+#define NODE_ID 1
 #define GROUP_ID 235 
 
 #define LIFESIGN_INTERVAL 600  /* in 0.1 s */
+#define METERKAST_WATCHDOG_INTERVAL 1200  // reset the meterkast node if we did not get a sign of life for 2 minutes
 
 #define SERIAL_BAUD 57600
+
+#define RESET_PIN         3  // wired to hardware RESET of the meterkast node
 
 #define LED_HEARTBEAT     5
 #define LED_DATA_SERIAL   6
@@ -29,6 +36,7 @@ enum {
   TASK_LED_HEARTBEAT,
   TASK_LED_SERIAL,
   TASK_LED_RF12,
+  TASK_METERKAST_WATCHDOG,
   TASK_LIMIT };
 
 static word schedBuf[TASK_LIMIT];
@@ -48,9 +56,57 @@ int freeRam () {
 }
 
 
+// code to display the sketch name/compile date
+// http://forum.arduino.cc/index.php?PHPSESSID=82046rhab9h76mt6q7p8fle0u4&topic=118605.msg894017#msg894017
+
+int pgm_lastIndexOf(uint8_t c, const char * p)
+{
+  int last_index = -1; // -1 indicates no match
+  uint8_t b;
+  for(int i = 0; true; i++) {
+    b = pgm_read_byte(p++);
+    if (b == c)
+      last_index = i;
+    else if (b == 0) break;
+  }
+  return last_index;
+}
+
+// displays at startup the Sketch running in the Arduino
+
+void display_srcfile_details(void){
+  const char *the_path = PSTR(__FILE__);           // save RAM, use flash to hold __FILE__ instead
+
+  int slash_loc = pgm_lastIndexOf('/',the_path); // index of last '/' 
+  if (slash_loc < 0) slash_loc = pgm_lastIndexOf('\\',the_path); // or last '\' (windows, ugh)
+
+  int dot_loc = pgm_lastIndexOf('.',the_path);   // index of last '.'
+  if (dot_loc < 0) dot_loc = pgm_lastIndexOf(0,the_path); // if no dot, return end of string
+
+  Serial.print("\nSketch: ");
+
+  for (int i = slash_loc+1; i < dot_loc; i++) {
+    uint8_t b = pgm_read_byte(&the_path[i]);
+    if (b != 0) Serial.print((char) b);
+    else break;
+  }
+
+  Serial.print(", Compiled on: ");
+  Serial.print(__DATE__);
+  Serial.print(" at ");
+  Serial.print(__TIME__);
+  Serial.print("\n");
+}
+
+
+
+
 void showHelp(void) 
 {
   Serial.println(F("\nTagPubRF12toSerial"));  
+  
+  display_srcfile_details();
+  
   
   Serial.print(F("Free RAM: "));
   Serial.println(freeRam());
@@ -84,6 +140,13 @@ void BlinkRF12Led(void)
 
 void setup(void) 
 {
+  // set the reset pin as input to prevent it from interfering with the reset circuitry
+  digitalWrite(RESET_PIN, HIGH);
+  delay(10);
+  pinMode(RESET_PIN,  INPUT);
+    
+  
+  
     pinMode(LED_HEARTBEAT,   OUTPUT);
     pinMode(LED_DATA_SERIAL, OUTPUT);
     pinMode(LED_DATA_RF12,   OUTPUT);
@@ -111,7 +174,9 @@ void setup(void)
   // start transmission of lifesign message
   scheduler.timer(TASK_LIFESIGN, LIFESIGN_INTERVAL);
   
-  
+  // arm the software watchdog for the meterkast node
+  scheduler.timer(TASK_METERKAST_WATCHDOG, METERKAST_WATCHDOG_INTERVAL);
+
   
   // register callback functions for the tag updates
   tagExchangeRF12.registerFloatHandler(&RF12_TagUpdateFloatHandler);
@@ -193,6 +258,10 @@ void Serial_TagUpdateLongHandler(int tagid, unsigned long timestamp, long value)
   }
   
   BlinkSerialLed();
+
+  // we received some data from the, reset the watchdog timer
+  scheduler.timer(TASK_METERKAST_WATCHDOG, METERKAST_WATCHDOG_INTERVAL);
+
   tagExchangeRF12.publishLong(tagid, value);
 }
 
@@ -300,6 +369,21 @@ void loop(void) {
       digitalWrite(LED_DATA_RF12,   LOW);
       break;
       
+      
+      
+    case TASK_METERKAST_WATCHDOG:
+      
+      if (debug_txt) {  
+        Serial.println(F("watchdog timeout -- RESET the meterkast node"));
+      }
+
+      pinMode(RESET_PIN,  OUTPUT);
+      digitalWrite(RESET_PIN, LOW);
+      delay(1000);
+      digitalWrite(RESET_PIN, HIGH);
+      pinMode(RESET_PIN,  INPUT);
+            
+      scheduler.timer(TASK_METERKAST_WATCHDOG, METERKAST_WATCHDOG_INTERVAL);
   }
 }    
 
