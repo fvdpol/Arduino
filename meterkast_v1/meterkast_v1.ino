@@ -1,9 +1,14 @@
 /*
- Basic MQTT example 
- 
-  - connects to an MQTT server
-  - publishes "hello world" to the topic "outTopic"
-  - subscribes to the topic "inTopic"
+  Meterkast node
+  
+  * receives TagExchange messages over serial port (from RF12<->Serial gateway)
+  * receives P1 messages from smart meter
+  * relays messages to/from MQTT broker
+  
+  note: occasionally this sketch hangs/crashes for unknown reasons. 
+  workaround: periodically emit lifesign messages to the RF12 gateway node and have this node monitor
+  these messages and raise an hardware interrupt if nothing is received for a while
+  
 */
 
 //#define USE_WDT  /* Watchdog time does not work with MEGA 2560 bootloader (old version?) */
@@ -24,7 +29,7 @@
 
 #define MQTTCONNECT_INTERVAL  50
 #define TRANSMIT_INTERVAL 150  /* in 0.1 s */
-#define LIFESIGN_INTERVAL 100  /* in 0.1 s */
+#define LIFESIGN_INTERVAL 150  /* in 0.1 s */
 #define WATCHDOG_INTERVAL 20   /* in 0.1 s -- should be smaller than the watchdog timeout */
 
 #define SERIAL_BAUD 57600
@@ -529,8 +534,9 @@ void showHelp(void)
 void setup()
 {
   // disable watchdog at boot-up, as the ethernet initialisation might take too long and wdt could still be enabled after soft-reset
+#ifdef USE_WDT
   wdt_disable();
-  
+#endif  
   
   // setup pinmodes
   pinMode(LED_HEARTBEAT,   OUTPUT);
@@ -761,7 +767,12 @@ void loop()
   switch (scheduler.poll()) {
       
   case TASK_MQTTCONNECT:
-        wdt_disable(); /* mqtt can take long time causing watchdog timeout to happen */
+#ifdef USE_WDT
+        wdt_disable(); 
+            // the MQTT connection can take up to 30 seconds (MMQT keepalive = 15s ???)
+            // this can cause problems with the watchdog
+#endif  
+
         switch(Ethernet.maintain()) {
           case 1:
                   Serial.println(F("Ethernet DHCP renew failed."));
@@ -775,7 +786,7 @@ void loop()
                   Serial.println(Ethernet.localIP());
                   break;
       
-            case 3:
+          case 3:
                   Serial.println(F("Ethernet DHCP rebind fail."));
                   break;
       
@@ -787,10 +798,7 @@ void loop()
                   break;
         }
 
-  
-    // the MQTT connection can take up to 30 seconds (MMQT keepalive = 15s ???)
-    // this can cause problems with the watchdog
-  
+    
         if (!MQTTClient.connected()) {
           Serial.println(F("MMQT connecting..."));
           if (MQTTClient.connect("Meterkast")) {     
@@ -823,6 +831,10 @@ void loop()
         sprintf(charMsg,"%d",freeRam());         
         MQTTClient.publish("raw/meterkast/freeram",charMsg);
       }
+      
+      
+      tagExchangeSerial.publishLong(TAG_L_LIFESIGN_NODE0 ,  millis());
+      
       
       scheduler.timer(TASK_LIFESIGN, LIFESIGN_INTERVAL);
       break;
