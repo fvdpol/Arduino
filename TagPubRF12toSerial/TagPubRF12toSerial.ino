@@ -10,7 +10,7 @@
 ** serial line to the meterkast node
 ** pin 3 is wired to the meterkast node RESET pin to allow a watchdog reset
 */
-
+#include <avr/wdt.h>
 #include <JeeLib.h>
 #include <TagExchange.h>
 
@@ -184,6 +184,10 @@ void setup(void)
 
   tagExchangeSerial.registerFloatHandler(&Serial_TagUpdateFloatHandler);
   tagExchangeSerial.registerLongHandler(&Serial_TagUpdateLongHandler);
+
+  // start hardware watchdog
+  wdt_enable(WDTO_8S);
+
 }  
 
 
@@ -333,6 +337,8 @@ void loop(void) {
       break;
       
     case TASK_LED_HEARTBEAT:
+      wdt_reset(); // reset the hardware watchdog timer
+      
       switch (heartbeat_state) {
         case 0:
           digitalWrite(LED_HEARTBEAT,   HIGH);
