@@ -1,3 +1,5 @@
+#include <aJSON.h>
+
 #include <JeeLib.h>
 #include <OneWire.h>
 #include <TagExchange.h>
@@ -19,8 +21,6 @@
 // http://playground.arduino.cc/Code/PIDLibrary
 //
 // http://fermentationriot.com/arduinopid.php
-=======
-#define TRANSMIT_INTERVAL 50  /* in 0.1 s */
 
 
 
